@@ -1,0 +1,23 @@
+# Database .gitignore
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+*.sql.backup
+
+# Backup files
+*.backup
+*.dump
+
+# Temporary files
+tmp/
+temp/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

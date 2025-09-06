@@ -1,0 +1,314 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  TEACHER
+  CC // Course Coordinator
+  HOD
+  ADMIN // Dean
+  SUPERADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CourseStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum VideoStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AnnouncementTarget {
+  STUDENT
+  TEACHER
+  BOTH
+  PRIVATE
+}
+
+model User {
+  id              String      @id @default(uuid())
+  uid             String      @unique // University ID
+  name            String
+  email           String      @unique
+  password_hash   String
+  roles           Role[]      @default([STUDENT])
+  is_active       UserStatus  @default(ACTIVE)
+  default_dashboard Role      @default(STUDENT)
+  two_fa_secret   String?     // For 2FA
+  two_fa_enabled  Boolean     @default(false)
+  profile_image   String?
+  phone           String?
+  created_at      DateTime    @default(now())
+  updated_at      DateTime    @updatedAt
+
+  // Relations
+  created_departments Department[] @relation("DepartmentCreator")
+  dean_departments    Department[] @relation("DepartmentDean")
+  enrollments         Enrollment[]
+  created_courses     Course[]     @relation("CourseCreator")
+  videos              Video[]
+  announcements       Announcement[]
+  logs                Log[]
+  quiz_attempts       QuizAttempt[]
+  forum_posts         ForumPost[]
+  forum_replies       ForumReply[]
+  certificates        Certificate[]
+  issued_certificates Certificate[] @relation("CertificateIssuer")
+
+  @@map("users")
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  dept_name   String   @unique
+  dean_id     String?
+  created_by  String
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  // Relations
+  dean        User?    @relation("DepartmentDean", fields: [dean_id], references: [id])
+  creator     User     @relation("DepartmentCreator", fields: [created_by], references: [id])
+  courses     Course[]
+
+  @@map("departments")
+}
+
+model Course {
+  id           String       @id @default(uuid())
+  course_name  String
+  course_code  String       @unique
+  description  String?
+  dept_id      String
+  created_by   String
+  status       CourseStatus @default(ACTIVE)
+  created_at   DateTime     @default(now())
+  updated_at   DateTime     @updatedAt
+
+  // Relations
+  department   Department   @relation(fields: [dept_id], references: [id])
+  creator      User         @relation("CourseCreator", fields: [created_by], references: [id])
+  sections     Section[]
+  videos       Video[]
+  announcements Announcement[]
+
+  @@map("courses")
+}
+
+model Section {
+  id           String   @id @default(uuid())
+  section_name String
+  course_id    String
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  // Relations
+  course       Course       @relation(fields: [course_id], references: [id])
+  enrollments  Enrollment[]
+  // videos       Video[]  // Removed: videos are now linked to Course, not Section
+  announcements Announcement[]
+  forum_posts  ForumPost[]
+
+  @@unique([course_id, section_name])
+  @@map("sections")
+}
+
+model Enrollment {
+  id         String   @id @default(uuid())
+  user_id    String
+  section_id String
+  role       Role     @default(STUDENT)
+  enrolled_at DateTime @default(now())
+
+  // Relations
+  user       User     @relation(fields: [user_id], references: [id])
+  section    Section  @relation(fields: [section_id], references: [id])
+
+  @@unique([user_id, section_id])
+  @@map("enrollments")
+}
+
+model Video {
+  id          String      @id @default(uuid())
+  title       String
+  description String?
+  video_url   String
+  thumbnail   String?
+  course_id   String
+  uploaded_by String
+  deadline    DateTime?
+  status      VideoStatus @default(PENDING)
+  duration    Int?        // in seconds
+  created_at  DateTime    @default(now())
+  updated_at  DateTime    @updatedAt
+
+  // Relations
+  course      Course      @relation(fields: [course_id], references: [id])
+  uploader    User        @relation(fields: [uploaded_by], references: [id])
+  quizzes     Quiz[]
+  watch_history WatchHistory[]
+
+  @@map("videos")
+}
+
+model Quiz {
+  id         String   @id @default(uuid())
+  video_id   String
+  title      String
+  questions  Json     // Array of questions with options
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // Relations
+  video      Video    @relation(fields: [video_id], references: [id])
+  attempts   QuizAttempt[]
+
+  @@map("quizzes")
+}
+
+model QuizAttempt {
+  id         String   @id @default(uuid())
+  quiz_id    String
+  user_id    String
+  answers    Json     // User's answers
+  score      Float
+  max_score  Float
+  completed_at DateTime @default(now())
+
+  // Relations
+  quiz       Quiz     @relation(fields: [quiz_id], references: [id])
+  user       User     @relation(fields: [user_id], references: [id])
+
+  @@map("quiz_attempts")
+}
+
+model WatchHistory {
+  id           String   @id @default(uuid())
+  user_id      String
+  video_id     String
+  watch_time   Int      // in seconds
+  completion   Float    // percentage
+  last_watched DateTime @default(now())
+
+  // Relations
+  video        Video    @relation(fields: [video_id], references: [id])
+
+  @@unique([user_id, video_id])
+  @@map("watch_history")
+}
+
+model Announcement {
+  id          String             @id @default(uuid())
+  title       String
+  content     String
+  sender_id   String
+  target_role AnnouncementTarget @default(BOTH)
+  course_id   String?
+  section_id  String?
+  target_users String[]          @default([]) // For private announcements
+  expiry_date DateTime?
+  created_at  DateTime           @default(now())
+  updated_at  DateTime           @updatedAt
+
+  // Relations
+  sender      User              @relation(fields: [sender_id], references: [id])
+  course      Course?           @relation(fields: [course_id], references: [id])
+  section     Section?          @relation(fields: [section_id], references: [id])
+
+  @@map("announcements")
+}
+
+model ForumPost {
+  id         String   @id @default(uuid())
+  title      String
+  content    String
+  section_id String
+  author_id  String
+  is_pinned  Boolean  @default(false)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // Relations
+  section    Section      @relation(fields: [section_id], references: [id])
+  author     User         @relation(fields: [author_id], references: [id])
+  replies    ForumReply[]
+
+  @@map("forum_posts")
+}
+
+model ForumReply {
+  id         String   @id @default(uuid())
+  content    String
+  post_id    String
+  author_id  String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // Relations
+  post       ForumPost @relation(fields: [post_id], references: [id])
+  author     User      @relation(fields: [author_id], references: [id])
+
+  @@map("forum_replies")
+}
+
+model Certificate {
+  id          String   @id @default(uuid())
+  user_id     String
+  course_id   String
+  issued_by   String
+  issued_at   DateTime @default(now())
+  certificate_url String
+  is_valid    Boolean  @default(true)
+
+  // Relations
+  user        User     @relation(fields: [user_id], references: [id])
+  issuer      User     @relation("CertificateIssuer", fields: [issued_by], references: [id])
+
+  @@unique([user_id, course_id])
+  @@map("certificates")
+}
+
+model SystemPermission {
+  id               String  @id @default(uuid())
+  chat_level       Int     @default(0) // 0-3
+  video_upload     Int     @default(0) // 0-2
+  announcement     Int     @default(0) // 0-3
+  quiz_delete      Boolean @default(false)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@map("system_permissions")
+}
+
+model Log {
+  id        String   @id @default(uuid())
+  user_id   String
+  action    String
+  context   Json?
+  ip_address String?
+  user_agent String?
+  timestamp DateTime @default(now())
+
+  // Relations
+  user      User     @relation(fields: [user_id], references: [id])
+
+  @@map("logs")
+}

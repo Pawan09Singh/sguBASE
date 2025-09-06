@@ -1,0 +1,53 @@
+# Backend .gitignore
+
+# Environment variables (keep .env.example)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Prisma
+# Keep schema.prisma and migrations, but ignore generated client
+prisma/generated/
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+database.db
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Test files
+test-server.js
+
+# Coverage
+coverage/
+
+# Temporary files
+tmp/
+temp/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
