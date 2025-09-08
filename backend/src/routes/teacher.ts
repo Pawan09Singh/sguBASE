@@ -154,7 +154,7 @@ router.get('/sections', requireTeacherOrHigher, async (req: Request, res: Respon
 router.post('/upload-video', [
   requireTeacherOrHigher,
   body('title').notEmpty().withMessage('Video title is required'),
-  body('courseId').notEmpty().withMessage('Course ID is required'),
+  body('course_id').notEmpty().withMessage('Course ID is required'),
 ], async (req: Request, res: Response) => {
   try {
     const errors = validationResult(req);
@@ -162,15 +162,18 @@ router.post('/upload-video', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { title, description, courseId, youtubeLink } = req.body;
+    const { title, description, course_id, video_url, youtubeLink } = req.body;
     const currentUserId = (req as any).user?.userId;
+
+    // Use video_url if provided, otherwise use youtubeLink for backward compatibility
+    const videoUrl = video_url || youtubeLink;
 
     // Verify teacher is assigned to this course (through any section)
     const teacherEnrollment = await prisma.enrollment.findFirst({
       where: {
         user_id: currentUserId,
         section: {
-          course_id: courseId
+          course_id: course_id
         },
         role: 'TEACHER'
       }
@@ -180,20 +183,20 @@ router.post('/upload-video', [
       return res.status(403).json({ error: 'You are not assigned to teach this course' });
     }
 
-    // If youtubeLink is provided, store it as a video resource
-    if (youtubeLink && typeof youtubeLink === 'string' && youtubeLink.trim().length > 0) {
+    // If videoUrl is provided, store it as a video resource
+    if (videoUrl && typeof videoUrl === 'string' && videoUrl.trim().length > 0) {
       const video = await prisma.video.create({
         data: {
           title,
           description: description || '',
-          video_url: youtubeLink,
-          course_id: courseId,
+          video_url: videoUrl,
+          course_id: course_id,
           uploaded_by: currentUserId,
           status: 'APPROVED', // Auto-approve for simplicity
         }
       });
       return res.json({
-        message: 'YouTube video link uploaded successfully',
+        message: 'Video uploaded successfully',
         video: {
           id: video.id,
           title: video.title,
@@ -215,7 +218,7 @@ router.post('/upload-video', [
         id: `video_${Date.now()}`,
         title,
         description,
-        courseId,
+        course_id,
         uploadedAt: new Date().toISOString()
       }
     });
@@ -226,7 +229,167 @@ router.post('/upload-video', [
   }
 });
 
-// Create quiz endpoint
+// Debug endpoint to test quiz creation data
+router.post('/debug-quiz', requireTeacherOrHigher, async (req: Request, res: Response) => {
+  console.log('DEBUG QUIZ REQUEST:');
+  console.log('Headers:', req.headers);
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  console.log('User:', (req as any).user);
+  
+  res.json({
+    message: 'Debug info logged',
+    receivedBody: req.body,
+    user: (req as any).user
+  });
+});
+
+// Get standalone quizzes for a course
+router.get('/courses/:courseId/quizzes', requireTeacherOrHigher, async (req: Request, res: Response) => {
+  try {
+    const { courseId } = req.params;
+    const currentUserId = (req as any).user?.userId;
+
+    console.log('Fetching standalone quizzes for course:', courseId);
+
+    // Verify teacher has access to this course
+    const teacherAccess = await prisma.enrollment.findFirst({
+      where: {
+        user_id: currentUserId,
+        section: {
+          course_id: courseId
+        },
+        role: 'TEACHER'
+      }
+    });
+
+    if (!teacherAccess) {
+      return res.status(403).json({ error: 'You do not have access to this course' });
+    }
+
+    // Get standalone quizzes (those not attached to videos)
+    const quizzes = await prisma.quiz.findMany({
+      where: {
+        video_id: {
+          startsWith: 'standalone-quiz-'
+        },
+        questions: {
+          path: ['course_id'],
+          equals: courseId
+        }
+      },
+      orderBy: {
+        created_at: 'asc'
+      }
+    });
+
+    const formattedQuizzes = quizzes.map(quiz => {
+      const questionsData = quiz.questions as any;
+      return {
+        id: quiz.id,
+        quiz_id: quiz.id,
+        type: 'quiz',
+        title: quiz.title,
+        questions: questionsData.questions || [],
+        course_id: questionsData.course_id,
+        unit_id: questionsData.unit_id,
+        unit_name: questionsData.unit_name,
+        created_at: quiz.created_at
+      };
+    });
+
+    console.log(`Found ${formattedQuizzes.length} standalone quizzes for course ${courseId}`);
+    res.json(formattedQuizzes);
+
+  } catch (error) {
+    console.error('Error fetching standalone quizzes:', error);
+    res.status(500).json({ error: 'Failed to fetch quizzes' });
+  }
+});
+
+// Create quiz endpoint - Simplified version
+router.post('/create-quiz-v2', [
+  requireTeacherOrHigher,
+  body('title').notEmpty().withMessage('Quiz title is required'),
+  body('course_id').notEmpty().withMessage('Course ID is required'),
+  body('questions').isArray({ min: 1 }).withMessage('At least one question is required')
+], async (req: Request, res: Response) => {
+  try {
+    console.log('Quiz creation v2 request body:', JSON.stringify(req.body, null, 2));
+    
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      console.log('Quiz validation errors:', errors.array());
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { title, description, course_id, questions, unit_id, unit_name } = req.body;
+    const currentUserId = (req as any).user?.userId;
+
+    console.log('Creating quiz v2 with:', { title, course_id, questionsCount: questions.length, currentUserId });
+
+    // Verify teacher has access to this course
+    const teacherAccess = await prisma.enrollment.findFirst({
+      where: {
+        user_id: currentUserId,
+        section: {
+          course_id: course_id
+        },
+        role: 'TEACHER'
+      }
+    });
+
+    if (!teacherAccess) {
+      console.log('Teacher access denied for course:', course_id);
+      return res.status(403).json({ error: 'You do not have access to this course' });
+    }
+
+    console.log('Teacher access verified, creating quiz directly in Quiz table...');
+
+    // Create quiz directly in the Quiz table without the video wrapper
+    const quizData = await prisma.quiz.create({
+      data: {
+        video_id: `standalone-quiz-${Date.now()}`, // Use a placeholder video_id for standalone quizzes
+        title,
+        questions: {
+          questions: questions,
+          course_id: course_id,
+          unit_id: unit_id || null,
+          unit_name: unit_name || null,
+          created_by: currentUserId,
+          created_at: new Date().toISOString()
+        }
+      }
+    });
+
+    console.log('Quiz v2 created successfully:', quizData.id);
+
+    res.json({
+      message: 'Quiz created successfully',
+      quiz: {
+        id: quizData.id,
+        quiz_id: quizData.id,
+        title: quizData.title,
+        course_id: course_id,
+        questions: questions,
+        unit_id,
+        unit_name,
+        type: 'quiz',
+        created_at: quizData.created_at
+      }
+    });
+
+  } catch (error) {
+    console.error('Quiz v2 creation error:', error);
+    console.error('Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : 'No stack trace'
+    });
+    res.status(500).json({ 
+      error: 'Failed to create quiz',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
 router.post('/create-quiz', [
   requireTeacherOrHigher,
   body('title').notEmpty().withMessage('Quiz title is required'),
@@ -234,13 +397,38 @@ router.post('/create-quiz', [
   body('questions').isArray({ min: 1 }).withMessage('At least one question is required')
 ], async (req: Request, res: Response) => {
   try {
+    console.log('Quiz creation request body:', req.body);
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('Quiz validation errors:', errors.array());
       return res.status(400).json({ errors: errors.array() });
     }
 
     const { title, description, course_id, questions, unit_id, unit_name } = req.body;
     const currentUserId = (req as any).user?.userId;
+
+    console.log('Creating quiz with:', { title, course_id, questionsCount: questions.length, currentUserId });
+
+    // Verify teacher has access to this course
+    const teacherAccess = await prisma.enrollment.findFirst({
+      where: {
+        user_id: currentUserId,
+        section: {
+          course_id: course_id
+        },
+        role: 'TEACHER'
+      }
+    });
+
+    if (!teacherAccess) {
+      console.log('Teacher access denied for course:', course_id);
+      return res.status(403).json({ error: 'You do not have access to this course' });
+    }
+
+    console.log('Teacher access verified, creating quiz...');
+
+    console.log('Teacher access verified, creating quiz...');
 
     // Create a standalone quiz in the videos table with a special marker
     // For now, we'll use the existing structure but mark it as a quiz
@@ -256,6 +444,8 @@ router.post('/create-quiz', [
       }
     });
 
+    console.log('Quiz video entry created:', quiz.id);
+
     // Store quiz questions and metadata in a separate table using the Quiz model
     const quizData = await prisma.quiz.create({
       data: {
@@ -269,6 +459,8 @@ router.post('/create-quiz', [
         }
       }
     });
+
+    console.log('Quiz data created:', quizData.id);
 
     res.json({
       message: 'Quiz created successfully',
@@ -288,7 +480,14 @@ router.post('/create-quiz', [
 
   } catch (error) {
     console.error('Quiz creation error:', error);
-    res.status(500).json({ error: 'Failed to create quiz' });
+    console.error('Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : 'No stack trace'
+    });
+    res.status(500).json({ 
+      error: 'Failed to create quiz',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 });
 
@@ -320,6 +519,22 @@ router.get('/courses/:courseId/content', requireTeacherOrHigher, async (req: Req
       },
       include: {
         quizzes: true
+      },
+      orderBy: {
+        created_at: 'asc'
+      }
+    });
+
+    // Also get standalone quizzes (not attached to videos)
+    const standaloneQuizzes = await prisma.quiz.findMany({
+      where: {
+        video_id: {
+          startsWith: 'standalone-quiz-'
+        },
+        questions: {
+          path: ['course_id'],
+          equals: courseId
+        }
       },
       orderBy: {
         created_at: 'asc'
@@ -370,7 +585,31 @@ router.get('/courses/:courseId/content', requireTeacherOrHigher, async (req: Req
       }
     });
 
-    res.json(formattedContent);
+    // Add standalone quizzes to the content
+    const standaloneQuizContent = standaloneQuizzes.map(quiz => {
+      const questionsData = quiz.questions as any;
+      return {
+        id: quiz.id,
+        quiz_id: quiz.id,
+        type: 'quiz',
+        title: quiz.title,
+        description: '',
+        questions: questionsData.questions || [],
+        course_id: questionsData.course_id,
+        unit_id: questionsData.unit_id,
+        unit_name: questionsData.unit_name,
+        created_at: quiz.created_at
+      };
+    });
+
+    // Combine and sort all content by creation date
+    const allContent = [...formattedContent, ...standaloneQuizContent].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+
+    console.log(`Returning ${formattedContent.length} video/quiz items + ${standaloneQuizContent.length} standalone quizzes = ${allContent.length} total items`);
+
+    res.json(allContent);
   } catch (error) {
     console.error('Get course content error:', error);
     res.status(500).json({ error: 'Failed to fetch course content' });

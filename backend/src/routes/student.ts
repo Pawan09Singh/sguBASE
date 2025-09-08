@@ -17,27 +17,42 @@ router.get('/courses', requireStudentOrHigher, async (req: Request, res: Respons
       include: {
         section: {
           include: {
-            course: {
-              include: {
-                videos: {
-                  where: {
-                    status: 'APPROVED'
-                  }
-                }
-              }
-            },
-            enrollments: {
-              where: {
-                role: 'TEACHER'
-              },
-              include: {
-                user: {
-                  select: {
-                    name: true
-                  }
-                }
-              }
-            }
+            course: true
+          }
+        }
+      }
+    });
+
+    // Get course details with videos separately to avoid complex nested queries
+    const courseIds = studentEnrollments.map(enrollment => enrollment.section.course_id);
+    
+    const coursesWithVideos = await prisma.course.findMany({
+      where: {
+        id: {
+          in: courseIds
+        }
+      },
+      include: {
+        videos: {
+          where: {
+            status: 'APPROVED'
+          }
+        }
+      }
+    });
+
+    // Get teacher information for each section
+    const teacherEnrollments = await prisma.enrollment.findMany({
+      where: {
+        section_id: {
+          in: studentEnrollments.map(e => e.section_id)
+        },
+        role: 'TEACHER'
+      },
+      include: {
+        user: {
+          select: {
+            name: true
           }
         }
       }
@@ -45,8 +60,9 @@ router.get('/courses', requireStudentOrHigher, async (req: Request, res: Respons
 
     const courses = studentEnrollments.map(enrollment => {
       const course = enrollment.section.course;
-      const teacher = enrollment.section.enrollments[0]?.user;
-      const totalVideos = course.videos.length;
+      const courseWithVideos = coursesWithVideos.find(c => c.id === course.id);
+      const teacher = teacherEnrollments.find(te => te.section_id === enrollment.section_id)?.user;
+      const totalVideos = courseWithVideos?.videos?.length || 0;
       
       // Mock data for video watch progress - in real app, track this in watch_history table
       const watchedVideos = Math.floor(Math.random() * totalVideos);
